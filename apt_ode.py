@@ -88,7 +88,7 @@ def load_data(name, path, core):
         with open(fp) as f:
             f.readline()
             for line in f:
-                p = line.strip().split(',')
+                p = line.strip().split('\t')
                 if len(p) >= 4:
                     data[p[0]].append((p[1], float(p[3])))
     else:
