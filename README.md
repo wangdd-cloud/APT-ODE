@@ -4,14 +4,14 @@ pip install torch numpy tqdm torchdiffeq
 project/
 ├── apt_ode.py         # 主模型：APT-ODE 训练与评估
 ├── pretrain.py        # BPR-MF 预训练 item embeddings
-├── ablation.py        # 消融实验（主消融 + 设计选择消融）
-├── sensitivity.py     # 超参数敏感性分析（三数据集）
-├── efficiency.py      # 效率测量（训练时间 / 推理延迟 / GPU 内存）
-└── data/              # 数据集目录（需自行下载）
+├── ablation.py        # 消融实验
+├── sensitivity.py     # 超参数敏感性分析
+├── efficiency.py      # 效率测量
+└── data/              # 数据集目录
 
 ## 真实数据集完整运行流程
 
-### 1. 预训练 BPR-MF embeddings（每个数据集跑一次）
+### 1. 预训练 BPR-MF embeddings
 
 ```bash
 python pretrain.py --dataset amazon --data_dir ./data/ --epochs 20
@@ -20,7 +20,7 @@ python pretrain.py --dataset ml20m   --data_dir ./data/ --epochs 20
 ```
 输出：`pretrained_emb_amazon.pt` / `pretrained_emb_steam.pt` / `pretrained_emb_ml20m.pt`
 
-### 2. 训练 APT-ODE（5-seed，获取 mean±std）
+### 2. 训练 APT-ODE
 
 ```bash
 python apt_ode.py --dataset amazon --data_dir ./data/ --pretrained_emb pretrained_emb_amazon.pt --n_seeds 5
@@ -29,20 +29,15 @@ python apt_ode.py --dataset ml20m  --data_dir ./data/ --pretrained_emb pretraine
 ```
 输出：每个数据集训练结束后打印 5-seed mean±std，保存模型 `aptode_<dataset>.pt`
 
-### 3. 消融实验（Table 4 + Table 5）
+### 3. 消融实验
 
 ```bash
-# 每个数据集跑全部消融（主消融 + 设计选择消融）
 python ablation.py --dataset amazon --data_dir ./data/ --ablation all --epochs 15 --n_seeds 5
 python ablation.py --dataset steam  --data_dir ./data/ --ablation all --epochs 15 --n_seeds 5
 python ablation.py --dataset ml20m  --data_dir ./data/ --ablation all --epochs 15 --n_seeds 5
-
-# 或分开跑：
-python ablation.py --dataset amazon --data_dir ./data/ --ablation main --n_seeds 5    # Table 4
-python ablation.py --dataset amazon --data_dir ./data/ --ablation design --n_seeds 5  # Table 5
 ```
 
-### 4. 超参数敏感性分析（图3 / RQ3）
+### 4. 超参数敏感性分析
 
 ```bash
 # 三数据集一次性跑完
@@ -55,7 +50,7 @@ python sensitivity.py --datasets ml20m   --data_dir ./data/ --epochs 10
 ```
 输出：每个数据集的 delta 和 w 敏感性结果，以及跨数据集最优值汇总
 
-### 5. 效率测量（Table 6 / RQ5）
+### 5. 效率测量
 
 ```bash
 python efficiency.py --dataset ml20m --data_dir ./data/ --pretrained_emb pretrained_emb_ml20m.pt
@@ -64,7 +59,7 @@ python efficiency.py --dataset ml20m --data_dir ./data/ --pretrained_emb pretrai
 
 ---
 
-## 快速测试（synthetic 数据，无需下载真实数据集）
+## 快速测试
 
 ```bash
 python apt_ode.py --dataset synthetic --epochs 2 --eval_users 50 --bs 32
@@ -95,7 +90,7 @@ python efficiency.py --dataset synthetic --bs 32
 | `--alpha` | 0.1 | 轨迹对齐损失权重 |
 | `--epochs` | 50 | 最大训练轮数 |
 | `--patience` | 20 | 早停轮数 |
-| `--bs` | 2048 | 批大小（与论文一致） |
+| `--bs` | 2048 | 批大小 |
 | `--core` | 5 | k-core 过滤阈值 |
 | `--eval_users` | 500 | 评估用户数上限 |
 | `--atol` / `--rtol` | 1e-5 | ODE solver 容差 |
