@@ -82,7 +82,6 @@ def pretrain(args):
     log.info(f'saved embeddings to {out_path}')
     return out_path
 
-
 def cli():
     p = argparse.ArgumentParser(description='BPR-MF pre-training')
     p.add_argument('--dataset', default='synthetic')

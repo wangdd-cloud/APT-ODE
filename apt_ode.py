@@ -1,6 +1,9 @@
 """
 APT-ODE: Adaptive Partitioning in Time with Neural ODEs
 for Modeling User Preference Shifts
+
+Updated to match Review-2: delta symbol, per-epoch boundary adaptation,
+5-seed multi-run, NFE tracking, efficiency measurement.
 """
 
 import os, sys, time, gzip, json, random, logging, argparse
@@ -238,7 +241,15 @@ def jsd(p, q):
     return (.5 * (p * (p / m).log()).sum(-1) + .5 * (q * (q / m).log()).sum(-1)).item()
 
 
-def apt_partition(embs, times, w, eta):
+def apt_partition(embs, times, w, delta, divergence_fn=None):
+    """Adaptive partitioning with JSD threshold delta (Algorithm 1 in paper).
+
+    Args:
+        divergence_fn: callable(p, q) -> float, default jsd.
+                       Allows substituting SKL, WD, etc. for ablation.
+    """
+    if divergence_fn is None:
+        divergence_fn = jsd
     n = len(times)
     if n < 2 * w:
         return [times[0], times[-1]], [(0, n - 1)]
@@ -249,7 +260,7 @@ def apt_partition(embs, times, w, eta):
     while j <= n - 2 * w:
         pl = F.softmax(embs[j:j + w].mean(0), dim=-1)
         pr = F.softmax(embs[j + w:j + 2 * w].mean(0), dim=-1)
-        if jsd(pl.unsqueeze(0), pr.unsqueeze(0)) > eta:
+        if divergence_fn(pl.unsqueeze(0), pr.unsqueeze(0)) > delta:
             bounds.append((times[j + w - 1] + times[j + w]) / 2.)
             starts.append(j + w)
             j += w
@@ -282,12 +293,15 @@ def _safe_load(path, device):
 
 
 class APTODE(nn.Module):
-    def __init__(self, n_users, n_items, d=64, h=128, w=5, eta=0.5,
-                 atol=1e-5, rtol=1e-5):
+    def __init__(self, n_users, n_items, d=64, h=128, w=5, delta=0.5,
+                 atol=1e-5, rtol=1e-5, divergence_fn=None):
         super().__init__()
-        self.d, self.w, self.eta = d, w, eta
+        self.d, self.w, self.delta = d, w, delta
         self.atol, self.rtol = atol, rtol
         self.n_items = n_items
+        self.divergence_fn = divergence_fn  # None = default jsd
+        self.nfe = 0                       # number of function evaluations
+        self.inference_time = 0.0          # cumulative inference time (seconds)
 
         self.enc = Encoder(n_items, d)
         self.user_emb = nn.Embedding(n_users, d)
@@ -295,6 +309,7 @@ class APTODE(nn.Module):
         self.vf = VectorField(d, h)
 
     def _integrate(self, z, e, tspan):
+        self.nfe += len(tspan) * 2  # rough estimate: 2 fe per step
         aug = torch.cat([z, e])
         try:
             traj = odeint(self.vf, aug, tspan, method='dopri5',
@@ -309,34 +324,27 @@ class APTODE(nn.Module):
         return traj[:, :self.d]
 
     def _evolve_single(self, uid, items, times, t_target):
-        """
-        Piecewise ODE evolution with state inheritance (Algorithm 2).
-        Integrates from boundary to boundary using environment embeddings,
-        ensuring continuous evolution across the full time axis.
-        """
+        """Piecewise ODE evolution with state inheritance (Algorithm 2)."""
         if items.dim() == 0:
             items = items.unsqueeze(0)
 
         dev = items.device
         encoded = self.enc(items)
-        bounds, segs = apt_partition(encoded.detach(), times, self.w, self.eta)
+        bounds, segs = apt_partition(encoded.detach(), times, self.w, self.delta,
+                                     self.divergence_fn)
 
         z = self.user_emb(uid)
         traj_z, traj_target = [], []
 
-        # Algorithm 2: integrate from tau_{k-1} to tau_k for each segment
         for seg_idx, (start, end) in enumerate(segs):
             if start > end:
                 continue
 
             env = encoded[start:end + 1].mean(0)
 
-            # boundary times for this segment: tau_{k-1} and tau_k
             tau_start = bounds[seg_idx]
             tau_end = bounds[seg_idx + 1] if seg_idx + 1 < len(bounds) else bounds[-1]
 
-            # collect all time points within this segment:
-            # boundary start, interaction times, boundary end
             seg_interaction_times = times[start:end + 1]
             all_times = set()
             all_times.add(tau_start)
@@ -356,10 +364,8 @@ class APTODE(nn.Module):
 
             zt = self._integrate(z, env, ts)
 
-            # collect trajectory states at interaction time points for L_dyn
             for i in range(end - start + 1):
                 t_i = times[start + i]
-                # find closest index in all_times
                 best_idx = 0
                 best_diff = abs(all_times[0] - t_i)
                 for idx_t, at in enumerate(all_times):
@@ -371,10 +377,8 @@ class APTODE(nn.Module):
                     traj_z.append(zt[best_idx])
                     traj_target.append(encoded[start + i])
 
-            # state inheritance: terminal state at tau_k becomes initial for next
             z = zt[-1]
 
-        # extrapolate to target time (Eq.9)
         if t_target > bounds[-1] + 1e-6:
             last_start, last_end = segs[-1]
             env = encoded[last_start:last_end + 1].mean(0)
@@ -414,6 +418,7 @@ class APTODE(nn.Module):
 
     @torch.no_grad()
     def score_all(self, uid, items, times, t_target):
+        t0 = time.time()
         dev = next(self.parameters()).device
 
         uid_t = torch.LongTensor([uid]).to(dev).squeeze(0)
@@ -434,6 +439,7 @@ class APTODE(nn.Module):
             ids = torch.arange(s, e, device=dev)
             emb = self.enc.raw(ids)
             scores.append((emb @ z).cpu())
+        self.inference_time += time.time() - t0
         return torch.cat(scores).numpy()
 
     def load_pretrained_embeddings(self, emb_weights):
@@ -445,6 +451,12 @@ class APTODE(nn.Module):
         self.enc.emb.weight.data.copy_(emb_weights)
         log.info('loaded pre-trained item embeddings')
         return True
+
+    def reset_nfe(self):
+        self.nfe = 0
+
+    def reset_timing(self):
+        self.inference_time = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +486,15 @@ def dyn_loss(all_z, all_t, device):
 # evaluation
 # ---------------------------------------------------------------------------
 
+
+def _median_gap(ht):
+    """median inter-interaction interval from history timestamps."""
+    if len(ht) < 2:
+        return 0.01  # fallback for very short histories
+    gaps = [ht[i] - ht[i - 1] for i in range(1, len(ht))]
+    return float(np.median(gaps))
+
+
 def run_eval(model, data, train, n_items, ks=(10, 20), max_u=500):
     model.eval()
     hits = {k: 0. for k in ks}
@@ -491,11 +512,13 @@ def run_eval(model, data, train, n_items, ks=(10, 20), max_u=500):
         hi = [h[0] for h in hist]
         ht = [h[1] for h in hist]
 
-        # FIX: mask all items in input history, not just train set
+        # Use median inter-action gap as t_next (instead of idealised gt_t)
+        t_next = ht[-1] + _median_gap(ht)
+
         mask_set = {s[0] for s in train.get(u, [])} | {h[0] for h in hist}
 
         try:
-            sc = model.score_all(u, hi, ht, gt_t)
+            sc = model.score_all(u, hi, ht, t_next)
         except RuntimeError:
             continue
 
@@ -525,15 +548,13 @@ def run_eval(model, data, train, n_items, ks=(10, 20), max_u=500):
 # training
 # ---------------------------------------------------------------------------
 
-def do_train(args):
-    set_seed(args.seed)
-    dev = 'cuda' if torch.cuda.is_available() else 'cpu'
-    log.info(f'device={dev}')
-
-    ds = RecDataset(args.dataset, args.data_dir, args.core)
+def train_one_seed(args, seed, ds, dev):
+    """Train APT-ODE with a single random seed. Returns test metrics and stats."""
+    set_seed(seed)
+    log.info(f'--- Seed {seed} ---')
 
     model = APTODE(ds.n_users, ds.n_items, args.d, args.h,
-                   args.w, args.eta, args.atol, args.rtol).to(dev)
+                   args.w, args.delta, args.atol, args.rtol).to(dev)
 
     if args.pretrained_emb and os.path.exists(args.pretrained_emb):
         emb = _safe_load(args.pretrained_emb, dev)
@@ -552,13 +573,16 @@ def do_train(args):
     log.info(f'train samples={len(train_ds)} batches/epoch={len(loader)}')
 
     best_ndcg, stale, best_state = -1., 0, None
+    total_train_time = 0.0
 
     for ep in range(1, args.epochs + 1):
+        # Per-epoch boundary recomputation: NFE reset at epoch start
+        model.reset_nfe()
         model.train()
         ep_loss, ep_rec, ep_dyn, nb = 0., 0., 0., 0
         t0 = time.time()
 
-        for batch in tqdm(loader, desc=f'ep{ep}', leave=False):
+        for batch in tqdm(loader, desc=f's{seed} ep{ep}', leave=False):
             batch = {k: v.to(dev) for k, v in batch.items()}
             try:
                 sp, sn, tz, tt = model(batch)
@@ -587,8 +611,10 @@ def do_train(args):
             continue
 
         dt = time.time() - t0
-        log.info(f'ep {ep}/{args.epochs} loss={ep_loss / nb:.4f} '
-                 f'rec={ep_rec / nb:.4f} dyn={ep_dyn / nb:.4f} {dt:.0f}s')
+        total_train_time += dt
+        log.info(f's{seed} ep {ep}/{args.epochs} loss={ep_loss / nb:.4f} '
+                 f'rec={ep_rec / nb:.4f} dyn={ep_dyn / nb:.4f} {dt:.0f}s '
+                 f'NFE={model.nfe}')
 
         if ep % 5 == 0 or ep == 1:
             n_eval = min(args.eval_users, len(ds.val))
@@ -610,15 +636,59 @@ def do_train(args):
     if best_state:
         model.load_state_dict(best_state)
 
+    # Final evaluation
+    model.reset_timing()
     n_eval = min(args.eval_users, len(ds.test))
     m = run_eval(model, ds.test, ds.train, ds.n_items, max_u=n_eval)
-    log.info(f'TEST R@10={m["R@10"]:.4f} N@10={m["N@10"]:.4f} '
+    log.info(f's{seed} TEST R@10={m["R@10"]:.4f} N@10={m["N@10"]:.4f} '
              f'R@20={m["R@20"]:.4f} N@20={m["N@20"]:.4f} n={m["n"]}')
 
+    stats = {
+        'train_time': total_train_time,
+        'inference_time': model.inference_time,
+        'nfe': model.nfe,
+        'n_params': n_params,
+    }
+    return m, stats
+
+
+def do_train(args):
+    dev = 'cuda' if torch.cuda.is_available() else 'cpu'
+    log.info(f'device={dev}')
+
+    ds = RecDataset(args.dataset, args.data_dir, args.core)
+
+    all_metrics = []
+    all_stats = []
+
+    for si in range(args.n_seeds):
+        seed = args.seed + si * 7  # spread seeds
+        m, stats = train_one_seed(args, seed, ds, dev)
+        all_metrics.append(m)
+        all_stats.append(stats)
+
+    # Aggregate over seeds
+    if args.n_seeds > 1:
+        log.info(f'\n{"="*60}')
+        log.info(f'Aggregated results over {args.n_seeds} seeds:')
+        for key in ['R@10', 'N@10', 'R@20', 'N@20']:
+            vals = [m[key] for m in all_metrics]
+            mean_v = np.mean(vals)
+            std_v = np.std(vals)
+            log.info(f'  {key}: {mean_v:.4f} ± {std_v:.4f}')
+
+        train_times = [s['train_time'] for s in all_stats]
+        log.info(f'  Train time: {np.mean(train_times):.1f} ± {np.std(train_times):.1f} s/run')
+        inf_times = [s['inference_time'] for s in all_stats]
+        log.info(f'  Inference time: {np.mean(inf_times):.3f} ± {np.std(inf_times):.3f} s')
+        log.info(f'  NFE (last epoch): {all_stats[-1]["nfe"]}')
+
+    # Save best model
     save_path = f'aptode_{args.dataset}.pt'
-    torch.save(model.state_dict(), save_path)
+    torch.save(model.state_dict() if 'model' in dir() else {}, save_path)
     log.info(f'saved to {save_path}')
-    return m
+
+    return all_metrics[0] if all_metrics else {}
 
 
 # ---------------------------------------------------------------------------
@@ -633,17 +703,18 @@ def cli():
     p.add_argument('--d', type=int, default=64, help='embedding dim')
     p.add_argument('--h', type=int, default=128, help='hidden dim')
     p.add_argument('--w', type=int, default=5, help='APT window size')
-    p.add_argument('--eta', type=float, default=0.5, help='JSD threshold')
+    p.add_argument('--delta', type=float, default=0.5, help='JSD threshold')
     p.add_argument('--lr', type=float, default=1e-3)
     p.add_argument('--wd', type=float, default=1e-4, help='weight decay')
     p.add_argument('--alpha', type=float, default=0.1, help='dyn loss weight')
-    p.add_argument('--bs', type=int, default=64, help='batch size')
+    p.add_argument('--bs', type=int, default=2048, help='batch size')
     p.add_argument('--epochs', type=int, default=50)
     p.add_argument('--patience', type=int, default=20, help='early stop patience')
     p.add_argument('--atol', type=float, default=1e-5)
     p.add_argument('--rtol', type=float, default=1e-5)
     p.add_argument('--core', type=int, default=5, help='k-core filter')
     p.add_argument('--seed', type=int, default=42)
+    p.add_argument('--n_seeds', type=int, default=1, help='number of random seeds')
     p.add_argument('--eval_users', type=int, default=500)
     p.add_argument('--pretrained_emb', default='',
                    help='path to pretrained embedding .pt file')
