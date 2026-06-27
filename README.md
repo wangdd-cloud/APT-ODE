@@ -1,13 +1,15 @@
 Python：>= 3.8  
 pip install torch numpy tqdm torchdiffeq    
 
-project/
-├── apt_ode.py         # 主模型：APT-ODE 训练与评估
-├── pretrain.py        # BPR-MF 预训练 item embeddings
-├── ablation.py        # 消融实验
-├── sensitivity.py     # 超参数敏感性分析
-├── efficiency.py      # 效率测量
-└── data/              # 数据集目录
+```
+APT-ODE/
+├── apt_ode.py          # 主模型训练与评估
+├── pretrain.py         # BPR-MF 预训练
+├── ablation.py         # 消融实验
+├── sensitivity.py      # 超参数敏感性分析
+├── efficiency.py       # 效率测量
+└── data/               # 数据集（需自行下载）
+```
 
 ## 真实数据集完整运行流程
 
