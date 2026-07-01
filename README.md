@@ -9,13 +9,9 @@ project/
 ├── ablation.py        # 消融实验（主消融 + 设计选择消融）
 ├── sensitivity.py     # 超参数敏感性分析（三数据集）
 ├── efficiency.py      # 效率测量（训练时间 / 推理延迟 / GPU 内存）
-├── plot_sensitivity.py # 生成图3 参数敏感性分析 PDF
-└── data/
-    ├── Electronics_5.json.gz     
-    ├── steam_reviews.json.gz     
-    └── ratings.csv    
-
- 主要参数
+├── data/
+     
+主要参数
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
