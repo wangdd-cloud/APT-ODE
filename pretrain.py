@@ -84,7 +84,7 @@ def pretrain(args):
 
 def cli():
     p = argparse.ArgumentParser(description='BPR-MF pre-training')
-    p.add_argument('--dataset', default='synthetic')
+    p.add_argument('--dataset', default='amazon')
     p.add_argument('--data_dir', default='./data/')
     p.add_argument('--d', type=int, default=64)
     p.add_argument('--lr', type=float, default=1e-3)

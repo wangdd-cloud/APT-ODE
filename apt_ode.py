@@ -104,23 +104,12 @@ def load_data(name, path, core):
     return dict(data)
 
 
-def make_synthetic(n_users=2000, n_items=500, seed=42):
-    rng = np.random.RandomState(seed)
-    data = {}
-    for u in range(n_users):
-        n = max(7, rng.poisson(20))
-        items = rng.randint(1, n_items, size=n)
-        ts = np.sort(rng.exponential(86400., size=n).cumsum())
-        data[str(u)] = [(int(items[i]), float(ts[i])) for i in range(n)]
-    return data
-
 
 class RecDataset:
     def __init__(self, name, data_dir, core):
         raw = load_data(name, data_dir, core)
         if raw is None:
-            log.warning(f'{name} not found in {data_dir}, using synthetic')
-            raw = make_synthetic()
+            raise FileNotFoundError(f'Dataset {name} not found in {data_dir}')
 
         u2i, i2i = {}, {}
         uid, iid = 0, 1
@@ -697,8 +686,8 @@ def do_train(args):
 
 def cli():
     p = argparse.ArgumentParser(description='APT-ODE')
-    p.add_argument('--dataset', default='synthetic',
-                   help='amazon / steam / ml20m / synthetic')
+    p.add_argument('--dataset', default='amazon',
+                   help='amazon / steam / ml20m')
     p.add_argument('--data_dir', default='./data/')
     p.add_argument('--d', type=int, default=64, help='embedding dim')
     p.add_argument('--h', type=int, default=128, help='hidden dim')

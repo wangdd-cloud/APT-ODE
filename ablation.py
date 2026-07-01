@@ -559,7 +559,7 @@ def run_design_ablation(args):
 
 def cli():
     p = argparse.ArgumentParser(description='APT-ODE ablation study')
-    p.add_argument('--dataset', default='synthetic')
+    p.add_argument('--dataset', default='amazon')
     p.add_argument('--data_dir', default='./data/')
     p.add_argument('--ablation', default='main',
                    choices=['main', 'design', 'all'],
