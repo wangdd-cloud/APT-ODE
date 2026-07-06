@@ -208,6 +208,7 @@ class VectorField(nn.Module):
     def __init__(self, d, h=128):
         super().__init__()
         self.d = d
+        self.nfe = 0  # actual function evaluation counter
         self.net = nn.Sequential(
             nn.Linear(2 * d, h), nn.Softplus(),
             nn.Linear(h, h), nn.Softplus(),
@@ -215,6 +216,7 @@ class VectorField(nn.Module):
         )
 
     def forward(self, t, ze):
+        self.nfe += 1  # count every solver call
         squeeze = ze.dim() == 1
         if squeeze:
             ze = ze.unsqueeze(0)
@@ -299,13 +301,7 @@ class APTODE(nn.Module):
         self.vf = VectorField(d, h)
 
     def _integrate(self, z, e, tspan):
-        # NFE is tracked cumulatively across all integration calls.
-        # For dopri5, the actual per-step cost is 6 fe (5-stage RK + 1 error estimate),
-        # plus rejected steps.  The factor 2 used here is a conservative
-        # underestimate chosen to match the adjoint method's lower NFE overhead.
-        # In efficiency reporting (Section 4.6, Fig. 5b), NFE serves as a
-        # relative comparison metric between models, not an absolute solver count.
-        self.nfe += len(tspan) * 2
+        self.vf.nfe = 0                    # reset per-integration counter
         aug = torch.cat([z, e])
         try:
             traj = odeint(self.vf, aug, tspan, method='dopri5',
@@ -317,6 +313,7 @@ class APTODE(nn.Module):
             except RuntimeError:
                 log.warning('ODE integration failed, returning initial state')
                 traj = aug.unsqueeze(0).expand(len(tspan), -1)
+        self.nfe += self.vf.nfe             # accumulate actual solver NFE
         return traj[:, :self.d]
 
     def _evolve_single(self, uid, items, times, t_target):
