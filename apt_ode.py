@@ -403,13 +403,12 @@ class APTODE(nn.Module):
             all_tz.append(tz); all_tt.append(tt)
 
         z_final = torch.stack(z_out)
-        # Scoring is performed in the raw embedding space (enc.raw), not the
-        # MLP-transformed semantic space (enc.forward).  The MLP encoder is
-        # used exclusively for APT boundary detection and environment embedding
-        # computation (see Eq. 1 and Eq. 5), while recommendation scoring
-        # (Eq. 9) uses the raw item embeddings for direct interpretability.
-        v_pos = self.enc.raw(batch['pos'])
-        v_neg = self.enc.raw(batch['neg'])
+        # Scoring is performed in the semantic space (enc.forward), consistent
+        # with the trajectory alignment loss. Both the preference state z_final
+        # and item embeddings reside in the MLP-transformed semantic space,
+        # ensuring compatible representations for inner-product ranking (Eq. 9).
+        v_pos = self.enc(batch['pos'])
+        v_neg = self.enc(batch['neg'])
         s_pos = (z_final * v_pos).sum(-1)
         s_neg = (z_final * v_neg).sum(-1)
         return s_pos, s_neg, all_tz, all_tt
@@ -435,7 +434,7 @@ class APTODE(nn.Module):
         for s in range(0, self.n_items, 1024):
             e = min(s + 1024, self.n_items)
             ids = torch.arange(s, e, device=dev)
-            emb = self.enc.raw(ids)
+            emb = self.enc(ids)  # use semantic space for scoring (Eq. 9)
             scores.append((emb @ z).cpu())
         self.inference_time += time.time() - t0
         return torch.cat(scores).numpy()
