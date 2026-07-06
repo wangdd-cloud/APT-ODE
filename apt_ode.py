@@ -714,7 +714,7 @@ def cli():
     p.add_argument('--core', type=int, default=5, help='k-core filter')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--n_seeds', type=int, default=1, help='number of random seeds')
-    p.add_argument('--eval_users', type=int, default=500)
+    p.add_argument('--eval_users', type=int, default=2000)
     p.add_argument('--pretrained_emb', default='',
                    help='path to pretrained embedding .pt file')
 
