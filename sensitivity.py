@@ -52,7 +52,7 @@ def quick_train_and_eval(label, ds, model_kwargs, args, dev):
         # Early stopping on validation NDCG@10 (every 3 epochs)
         if ep % 3 == 0:
             n_eval = min(args.eval_users, len(ds.val))
-            m = run_eval(model, ds.val, ds.train, ds.n_items, max_u=n_eval)
+            m = run_eval(model, ds.val, ds.train, ds.n_items, max_u=n_eval, seed=42)
             if m['N@10'] > best_ndcg:
                 best_ndcg = m['N@10']
                 stale = 0
@@ -69,7 +69,7 @@ def quick_train_and_eval(label, ds, model_kwargs, args, dev):
     if best_state:
         model.load_state_dict(best_state)
     return run_eval(model, ds.test, ds.train, ds.n_items,
-                    max_u=min(args.eval_users, len(ds.test)))
+                    max_u=min(args.eval_users, len(ds.test)), seed=2024)
 
 
 def run_sensitivity(args):
