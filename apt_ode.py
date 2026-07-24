@@ -92,7 +92,7 @@ def load_data(name, path, core):
         with open(fp) as f:
             f.readline()
             for line in f:
-                p = line.strip().split('\t')
+                p = line.strip().split(',')
                 if len(p) >= 4:
                     data[p[0]].append((p[1], float(p[3])))
     else:
@@ -492,7 +492,7 @@ def _median_gap(ht):
     return float(np.median(gaps))
 
 
-def run_eval(model, data, train, n_items, ks=(10, 20), max_u=2000):
+def run_eval(model, data, train, n_items, ks=(10, 20), max_u=2000, seed=42):
     model.eval()
     hits = {k: 0. for k in ks}
     ndcgs = {k: 0. for k in ks}
@@ -500,7 +500,7 @@ def run_eval(model, data, train, n_items, ks=(10, 20), max_u=2000):
 
     users = list(data.keys())
     if len(users) > max_u:
-        rng = random.Random(42)           # fixed seed for reproducibility
+        rng = random.Random(seed)           # configurable seed for reproducibility
         users = rng.sample(users, max_u)  # evaluate on a random subset under full-ranking
 
     for u in tqdm(users, desc='eval', leave=False):
@@ -616,7 +616,7 @@ def train_one_seed(args, seed, ds, dev):
 
         if ep % 5 == 0 or ep == 1:
             n_eval = min(args.eval_users, len(ds.val))
-            m = run_eval(model, ds.val, ds.train, ds.n_items, max_u=n_eval)
+            m = run_eval(model, ds.val, ds.train, ds.n_items, max_u=n_eval, seed=seed)
             log.info(f'  val R@10={m["R@10"]:.4f} N@10={m["N@10"]:.4f} '
                      f'R@20={m["R@20"]:.4f} N@20={m["N@20"]:.4f} n={m["n"]}')
 
@@ -637,7 +637,7 @@ def train_one_seed(args, seed, ds, dev):
     # Final evaluation
     model.reset_timing()
     n_eval = min(args.eval_users, len(ds.test))
-    m = run_eval(model, ds.test, ds.train, ds.n_items, max_u=n_eval)
+    m = run_eval(model, ds.test, ds.train, ds.n_items, max_u=n_eval, seed=seed + 1000)
     log.info(f's{seed} TEST R@10={m["R@10"]:.4f} N@10={m["N@10"]:.4f} '
              f'R@20={m["R@20"]:.4f} N@20={m["N@20"]:.4f} n={m["n"]}')
 
@@ -646,6 +646,7 @@ def train_one_seed(args, seed, ds, dev):
         'inference_time': model.inference_time,
         'nfe': model.nfe,
         'n_params': n_params,
+        'best_state': best_state,
     }
     return m, stats
 
@@ -681,10 +682,15 @@ def do_train(args):
         log.info(f'  Inference time: {np.mean(inf_times):.3f} ± {np.std(inf_times):.3f} s')
         log.info(f'  NFE (last epoch): {all_stats[-1]["nfe"]}')
 
-    # Save best model
+    # Save best model (best N@10 across seeds)
+    best_idx = max(range(len(all_metrics)), key=lambda i: all_metrics[i]['N@10'])
+    best_state = all_stats[best_idx].get('best_state')
     save_path = f'aptode_{args.dataset}.pt'
-    torch.save(model.state_dict() if 'model' in dir() else {}, save_path)
-    log.info(f'saved to {save_path}')
+    if best_state:
+        torch.save(best_state, save_path)
+    else:
+        torch.save({}, save_path)
+    log.info(f'saved best model (seed {args.seed + best_idx * 7}) to {save_path}')
 
     return all_metrics[0] if all_metrics else {}
 
