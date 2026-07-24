@@ -195,10 +195,12 @@ def skl_divergence(p, q):
 
 
 def wasserstein_1d(p, q):
-    """1D Wasserstein distance approximation via sorting."""
+    """1D Wasserstein distance (Earth Mover's Distance) via CDF difference."""
     p_sorted, _ = torch.sort(p)
     q_sorted, _ = torch.sort(q)
-    return torch.abs(p_sorted - q_sorted).mean().item()
+    cdf_p = p_sorted.cumsum(0)
+    cdf_q = q_sorted.cumsum(0)
+    return torch.abs(cdf_p - cdf_q).sum().item()
 
 
 # ======================================================================
@@ -411,7 +413,7 @@ def train_variant(name, model, ds, args, dev, use_l2_loss=False):
         # Early stopping on validation NDCG@10
         if ep % 3 == 0:
             n_eval = min(args.eval_users, len(ds.val))
-            m = run_eval(model, ds.val, ds.train, ds.n_items, max_u=n_eval)
+            m = run_eval(model, ds.val, ds.train, ds.n_items, max_u=n_eval, seed=42)
             if m['N@10'] > best_ndcg:
                 best_ndcg = m['N@10']; stale = 0
             else:
@@ -421,7 +423,7 @@ def train_variant(name, model, ds, args, dev, use_l2_loss=False):
                 break
 
     return run_eval(model, ds.test, ds.train, ds.n_items,
-                    max_u=min(args.eval_users, len(ds.test)))
+                    max_u=min(args.eval_users, len(ds.test)), seed=2024)
 
 
 # ======================================================================
